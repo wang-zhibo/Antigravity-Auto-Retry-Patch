@@ -1209,6 +1209,19 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
             agentView = document.querySelector('[data-mode-id="antigravity-agent"], .agent-view, [aria-label*="Antigravity Agent" i], [id*="antigravity.panel"]');
         }
 
+        if (!agentView) {
+            const agentChild = document.querySelector(
+                'div[contenteditable="true"][data-lexical-editor="true"], ' +
+                '[data-testid="ask-question-option"], ' +
+                'button[data-testid="interaction-continue-button"], ' +
+                'button[data-testid="model-selector-trigger"], ' +
+                'button[data-tooltip-id="input-send-button-cancel-tooltip"]'
+            );
+            if (agentChild) {
+                agentView = agentChild.closest('.monaco-pane-view, .pane, .split-view-view, .composite, .part.auxiliarybar, .part.sidebar, .antigravity-agent-side-panel') || agentChild.parentElement;
+            }
+        }
+
         return agentView || null;
     }
 
@@ -1331,8 +1344,9 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
                 const agentView = getAgentView();
                 const buttons = getAgentButtons(agentView);
 
-                // If agent view is not open and no active permission dialog is present, do nothing
-                if (!agentView && buttons.length === 0) {
+                const hasPermissionCard = !!document.querySelector('[data-testid="ask-question-option"], button[data-testid="interaction-continue-button"]');
+                // If agent view is not open and no active permission card or dialog is present, do nothing
+                if (!agentView && buttons.length === 0 && !hasPermissionCard) {
                     return;
                 }
 
@@ -1366,33 +1380,41 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
                 ${includeAllow ? `
                 // --- Part 2: Auto Allow logic ---
                 // 2a. Handle interactive permission question cards (ask_permission / ask_question options)
-                const searchRoot = agentView || document;
-                const permissionOptions = Array.from(searchRoot.querySelectorAll('[data-testid="ask-question-option"], label[data-testid="ask-question-option"]')).filter(el => !isSystemArea(el));
-                for (const option of permissionOptions) {
-                    if (clickedButtons.has(option)) continue;
-                    const text = (option.textContent || "").toLowerCase();
-                    const isAllowOption = text.includes("allow") || text.includes("yes, allow");
-                    if (isAllowOption) {
-                        const input = option.querySelector('input[type="radio"], input[type="checkbox"]');
-                        const isChecked = input ? input.checked : option.getAttribute('aria-checked') === 'true';
-                        if (!isChecked) {
-                            console.log("Antigravity IDE Auto-Retry: Selecting permission allow option: " + text.trim());
-                            writeDebugLog("Selecting permission allow option: " + text.trim(), option);
-                            if (input) input.click();
-                            else option.click();
-                        }
+                const permissionOptions = Array.from(document.querySelectorAll('[data-testid="ask-question-option"], label[data-testid="ask-question-option"]')).filter(el => !isSystemArea(el));
+                if (permissionOptions.length > 0) {
+                    const allowOption = permissionOptions.find(option => {
+                        const text = (option.textContent || "").toLowerCase();
+                        return text.includes("allow this time") || text.includes("yes, allow") || text.includes("allow");
+                    }) || permissionOptions[0];
 
-                        // Submit via interaction-continue-button
-                        const container = option.closest('.no-focus-agent-input, .flex.flex-col') || agentView || document;
-                        const continueBtn = container.querySelector('button[data-testid="interaction-continue-button"]');
-                        if (continueBtn && !continueBtn.disabled && !clickedButtons.has(continueBtn) && !isSystemArea(continueBtn)) {
-                            console.log("Antigravity IDE Auto-Retry: Confirming permission submission...");
+                    if (allowOption) {
+                        const input = allowOption.querySelector('input[type="radio"], input[type="checkbox"]');
+                        const isChecked = input ? input.checked : (allowOption.getAttribute('aria-checked') === 'true' || allowOption.classList.contains('border-primary'));
+
+                        if (!isChecked) {
+                            console.log("Antigravity IDE Auto-Retry: Selecting permission allow option: " + allowOption.textContent.trim());
+                            writeDebugLog("Selecting permission allow option: " + allowOption.textContent.trim(), allowOption);
+                            if (input) {
+                                input.checked = true;
+                                input.dispatchEvent(new Event('change', { bubbles: true }));
+                                input.click();
+                            } else {
+                                allowOption.click();
+                            }
+                        }
+                    }
+
+                    // Confirm via interaction-continue-button (Submit / Continue)
+                    const continueBtn = document.querySelector('button[data-testid="interaction-continue-button"]');
+                    if (continueBtn && !continueBtn.disabled && !isSystemArea(continueBtn)) {
+                        if (!clickedButtons.has(continueBtn)) {
+                            console.log("Antigravity IDE Auto-Retry: Confirming permission submission (clicking Submit)...");
                             writeDebugLog("Clicking interaction continue/submit button", continueBtn);
-                            clickedButtons.add(option);
                             clickedButtons.add(continueBtn);
+                            continueBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                            continueBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
                             continueBtn.click();
                         }
-                        break;
                     }
                 }
 
@@ -1453,21 +1475,23 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
                 ${includeSubmit ? `
                 // --- Part 3b: Auto Submit logic ---
                 const submitButton = buttons.find(button => {
-                    if (clickedButtons.has(button) || button.disabled) return false;
+                    if (clickedButtons.has(button) || button.disabled || isSystemArea(button)) return false;
                     const text = (button.textContent || "").toLowerCase().trim();
                     const testId = (button.getAttribute('data-testid') || "").toLowerCase();
 
-                    if (testId === 'interaction-continue-button' && text.includes('submit')) return true;
+                    if (testId === 'interaction-continue-button') return true;
 
                     return (text === "submit" || 
                            text === "absenden" || 
                            text === "übermitteln" ||
                            text.includes("submit"));
-                });
-                if (submitButton && !(submitButton.disabled)) {
+                }) || document.querySelector('button[data-testid="interaction-continue-button"]');
+                if (submitButton && !submitButton.disabled && !clickedButtons.has(submitButton) && !isSystemArea(submitButton)) {
                     console.log("Antigravity IDE Auto-Retry: Found Submit button. Clicking...");
                     writeDebugLog('Clicking Submit button', submitButton);
                     clickedButtons.add(submitButton);
+                    submitButton.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                    submitButton.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
                     submitButton.click();
                 }
                 ` : ''}
