@@ -1169,6 +1169,15 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
     /**
      * Robust method to locate the Agent View container to avoid clicking elements elsewhere.
      */
+    /**
+     * Checks if an element is part of the IDE system shell (status bar, notifications, title bar, etc.)
+     * We NEVER want the agent auto-clicker to touch system buttons or notifications!
+     */
+    function isSystemArea(el) {
+        if (!el || !el.closest) return false;
+        return !!el.closest('.statusbar, #workbench\\\\.parts\\\\.statusbar, .part.statusbar, .notifications-toasts, .notification-toast-container, .titlebar, #workbench\\\\.parts\\\\.titlebar, .activitybar, #workbench\\\\.parts\\\\.activitybar, .quick-input-widget');
+    }
+
     function getAgentView() {
         let agentView = document.querySelector('.antigravity-agent-side-panel');
 
@@ -1177,30 +1186,42 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
         }
 
         if (!agentView) {
-            const inputBox = document.getElementById('antigravity.agentSidePanelInputBox');
-            if (inputBox) agentView = inputBox.closest('.monaco-pane-view, .pane, .split-view-view, .composite, .antigravity-agent-side-panel');
+            const inputBox = document.getElementById('antigravity.agentSidePanelInputBox') || document.querySelector('#antigravity\\\\.agentSidePanelInputBox');
+            if (inputBox) agentView = inputBox.closest('.monaco-pane-view, .pane, .split-view-view, .composite, .part.auxiliarybar, .part.sidebar, .antigravity-agent-side-panel');
         }
 
         if (!agentView) {
             const sendBtn = document.querySelector('button[data-testid="send-button"], button[data-tooltip-id="input-send-button-cancel-tooltip"]');
-            if (sendBtn) agentView = sendBtn.closest('.monaco-pane-view, .pane, .split-view-view, .composite, .antigravity-agent-side-panel') || sendBtn.parentElement;
+            if (sendBtn) agentView = sendBtn.closest('.monaco-pane-view, .pane, .split-view-view, .composite, .part.auxiliarybar, .part.sidebar, .antigravity-agent-side-panel') || sendBtn.parentElement;
         }
 
         if (!agentView) {
             const agentHeader = document.querySelector('.pane-header[aria-label*="Agent" i], .title[aria-label*="Agent" i]');
-            if (agentHeader) agentView = agentHeader.closest('.monaco-pane-view, .pane, .split-view-view, .composite, .antigravity-agent-side-panel');
+            if (agentHeader) agentView = agentHeader.closest('.monaco-pane-view, .pane, .split-view-view, .composite, .part.auxiliarybar, .part.sidebar, .antigravity-agent-side-panel');
         }
         
         if (!agentView) {
             const chatBg = document.querySelector('.bg-ide-chat-background');
-            if (chatBg) agentView = chatBg.closest('.monaco-pane-view, .pane, .split-view-view, .composite, .antigravity-agent-side-panel') || chatBg.parentElement;
+            if (chatBg) agentView = chatBg.closest('.monaco-pane-view, .pane, .split-view-view, .composite, .part.auxiliarybar, .part.sidebar, .antigravity-agent-side-panel') || chatBg.parentElement;
         }
 
         if (!agentView) {
-            agentView = document;
+            agentView = document.querySelector('[data-mode-id="antigravity-agent"], .agent-view, [aria-label*="Antigravity Agent" i], [id*="antigravity.panel"]');
         }
-        
-        return agentView;
+
+        return agentView || null;
+    }
+
+    function getAgentButtons(agentView) {
+        const result = [];
+        if (agentView) {
+            result.push(...agentView.querySelectorAll("button, a.monaco-button, [role='button']"));
+        }
+        const dialog = document.querySelector('.monaco-dialog-box, .dialog-buttons');
+        if (dialog && !isSystemArea(dialog)) {
+            result.push(...dialog.querySelectorAll("button, a.monaco-button, [role='button']"));
+        }
+        return result.filter(el => !isSystemArea(el));
     }
 
     ${includeContinue ? `
@@ -1208,8 +1229,9 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
      * Helper to find buttons by title, aria-label, tooltip, test-id, or text.
      */
     function findButtonByAttribute(searchText) {
-        const root = getAgentView() || document;
-        const elements = Array.from(root.querySelectorAll('button, a.monaco-button, div.monaco-button, [role="button"]'));
+        const root = getAgentView();
+        if (!root) return null;
+        const elements = Array.from(root.querySelectorAll('button, a.monaco-button, div.monaco-button, [role="button"]')).filter(el => !isSystemArea(el));
         const regex = new RegExp(searchText, 'i');
         return elements.find(el => {
             const title = el.getAttribute('title') || '';
@@ -1226,8 +1248,8 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
      */
     function setInputValue(selector, value) {
         const root = getAgentView() || document;
-        const input = root.querySelector(selector) || document.querySelector(selector);
-        if (input) {
+        const input = (root !== document ? root.querySelector(selector) : null) || document.querySelector(selector);
+        if (input && !isSystemArea(input)) {
             writeDebugLog(\`Setting input value "\${value}" for selector "\${selector}"\`, input);
             input.focus();
             if (input.isContentEditable || input.getAttribute('contenteditable') === 'true' || input.hasAttribute('data-lexical-editor')) {
@@ -1260,9 +1282,10 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
         writeDebugLog('Starting recovery sequence due to hangup.');
 
         try {
+            const agentView = getAgentView();
             // 1. Click Cancel button
-            const cancelButton = document.querySelector('button[data-tooltip-id="input-send-button-cancel-tooltip"], button[data-testid="send-button-cancel"]') || findButtonByAttribute('Cancel');
-            if (cancelButton) {
+            const cancelButton = (agentView ? agentView.querySelector('button[data-tooltip-id="input-send-button-cancel-tooltip"], button[data-testid="send-button-cancel"]') : null) || findButtonByAttribute('Cancel');
+            if (cancelButton && !isSystemArea(cancelButton)) {
                 console.log('Antigravity IDE Auto-Retry: Clicking Cancel button.');
                 writeDebugLog('Clicking Cancel button', cancelButton);
                 cancelButton.click();
@@ -1279,10 +1302,10 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
             await new Promise(r => setTimeout(r, 3000));
 
             // 5. Click Send
-            const sendButton = document.querySelector('button[data-testid="send-button"]') || 
+            const sendButton = (agentView ? agentView.querySelector('button[data-testid="send-button"]') : null) || 
                                findButtonByAttribute('Send') || 
-                               document.querySelector('button[aria-label*="Send message" i]');
-            if (sendButton && !sendButton.disabled) {
+                               (agentView ? agentView.querySelector('button[aria-label*="Send message" i]') : null);
+            if (sendButton && !sendButton.disabled && !isSystemArea(sendButton)) {
                 console.log('Antigravity IDE Auto-Retry: Clicking Send button.');
                 writeDebugLog('Clicking Send button', sendButton);
                 sendButton.click();
@@ -1306,7 +1329,12 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
         intervalId = setInterval(() => {
             try {
                 const agentView = getAgentView();
-                const buttons = Array.from(document.querySelectorAll("button, a.monaco-button, [role='button']"));
+                const buttons = getAgentButtons(agentView);
+
+                // If agent view is not open and no active permission dialog is present, do nothing
+                if (!agentView && buttons.length === 0) {
+                    return;
+                }
 
                 ${includeRetry ? `
                 // --- Part 1: Auto Retry logic ---
@@ -1338,7 +1366,8 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
                 ${includeAllow ? `
                 // --- Part 2: Auto Allow logic ---
                 // 2a. Handle interactive permission question cards (ask_permission / ask_question options)
-                const permissionOptions = Array.from(document.querySelectorAll('[data-testid="ask-question-option"], label[data-testid="ask-question-option"]'));
+                const searchRoot = agentView || document;
+                const permissionOptions = Array.from(searchRoot.querySelectorAll('[data-testid="ask-question-option"], label[data-testid="ask-question-option"]')).filter(el => !isSystemArea(el));
                 for (const option of permissionOptions) {
                     if (clickedButtons.has(option)) continue;
                     const text = (option.textContent || "").toLowerCase();
@@ -1354,9 +1383,9 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
                         }
 
                         // Submit via interaction-continue-button
-                        const container = option.closest('.no-focus-agent-input, .flex.flex-col') || document;
-                        const continueBtn = container.querySelector('button[data-testid="interaction-continue-button"]') || document.querySelector('button[data-testid="interaction-continue-button"]');
-                        if (continueBtn && !continueBtn.disabled && !clickedButtons.has(continueBtn)) {
+                        const container = option.closest('.no-focus-agent-input, .flex.flex-col') || agentView || document;
+                        const continueBtn = container.querySelector('button[data-testid="interaction-continue-button"]');
+                        if (continueBtn && !continueBtn.disabled && !clickedButtons.has(continueBtn) && !isSystemArea(continueBtn)) {
                             console.log("Antigravity IDE Auto-Retry: Confirming permission submission...");
                             writeDebugLog("Clicking interaction continue/submit button", continueBtn);
                             clickedButtons.add(option);
@@ -1445,13 +1474,11 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
 
                 ${includeContinue ? `
                 // --- Part 4: "Running" monitoring logic (Auto Continue) ---
-                if (!isHandlingSequence) {
-                    const viewElement = agentView === document ? document.body : agentView;
-                    const bodyText = viewElement.innerText || '';
+                if (!isHandlingSequence && agentView) {
+                    const bodyText = agentView.innerText || '';
 
                     // 1. Check for cancel/stop button in the input area
-                    const hasCancelBtn = !!(document.querySelector('button[data-tooltip-id="input-send-button-cancel-tooltip"], button[data-testid="send-button-cancel"]') ||
-                                           document.querySelector('[data-testid="send-button-pending"]') ||
+                    const hasCancelBtn = !!(agentView.querySelector('button[data-tooltip-id="input-send-button-cancel-tooltip"], button[data-testid="send-button-cancel"], [data-testid="send-button-pending"]') ||
                                            findButtonByAttribute('Cancel'));
 
                     // 2. Check for dynamic status indicators
@@ -1607,8 +1634,9 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
 
                 // --- Part 7: Auto-Restore Last Selected AI Model ---
                 if (enableRestoreModel) {
-                    const modelBtn = document.querySelector('button[data-testid="model-selector-trigger"], button[aria-label*="Select model" i]');
-                    if (modelBtn) {
+                    const savedModel = localStorage.getItem('antigravity-patched-last-model');
+                    const modelBtn = (agentView ? agentView.querySelector('button[data-testid="model-selector-trigger"], button[aria-label*="Select model" i]') : null) || document.querySelector('button[data-testid="model-selector-trigger"]');
+                    if (modelBtn && !isSystemArea(modelBtn)) {
                         let currentModel = '';
                         const ariaLabel = modelBtn.getAttribute('aria-label') || '';
                         const match = ariaLabel.match(/current:\s*(.+)$/i);
@@ -1618,7 +1646,7 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
                             currentModel = modelBtn.textContent.trim();
                         }
 
-                        if (currentModel) {
+                        if (currentModel && currentModel.length >= 2) {
                             // 1. Detect manual changes
                             if (modelRestored && currentModel !== lastModelValue) {
                                 console.log("Antigravity IDE Auto-Retry: Model changed from " + lastModelValue + " to " + currentModel + ". Saving to localStorage.");
@@ -1628,7 +1656,7 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
                             }
 
                             // 2. Restore model
-                            if (!modelRestored && savedModel) {
+                            if (!modelRestored && savedModel && savedModel.length >= 2) {
                                 if (currentModel === savedModel) {
                                     console.log("Antigravity IDE Auto-Retry: Model is already " + savedModel + ". Restore complete.");
                                     writeDebugLog("Model is already " + savedModel + ". Restore complete.");
@@ -1638,9 +1666,10 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
                                 } else {
                                     const now = Date.now();
                                     const parentDiv = modelBtn.closest('[aria-haspopup="dialog"], [data-state]');
+                                    const dropdownPanel = document.querySelector('[data-testid="model-selector-panel"], [data-radix-popper-content-wrapper], [role="dialog"], .context-view');
                                     const isDropdownOpen = modelBtn.getAttribute('aria-expanded') === 'true' || 
                                                            (parentDiv && parentDiv.getAttribute('aria-expanded') === 'true') ||
-                                                           !!document.querySelector('[data-testid="model-selector-panel"]');
+                                                           !!dropdownPanel;
 
                                     if (!isDropdownOpen) {
                                         if (pendingSubmenuOpen) {
@@ -1657,7 +1686,8 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
                                             openAttempts++;
                                         }
                                     } else {
-                                        const interactiveElements = Array.from(document.querySelectorAll('[data-testid="model-selector-item"], [data-testid="model-selector-effort-option"], button, [role="menuitem"], [role="option"], .setting-dropdown-option, [class*="option" i], [class*="item" i]'));
+                                        if (!dropdownPanel) return;
+                                        const interactiveElements = Array.from(dropdownPanel.querySelectorAll('[data-testid="model-selector-item"], [data-testid="model-selector-effort-option"], button, [role="menuitem"], [role="option"]')).filter(el => !isSystemArea(el));
                                         
                                         let baseModel = savedModel;
                                         let tier = null;

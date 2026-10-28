@@ -7,6 +7,25 @@ echo "========================================================"
 echo "Antigravity IDE Patch Installer (Linux/Debian)"
 echo "========================================================"
 echo
+
+# If system Node.js is already installed, use it directly
+if command -v node >/dev/null 2>&1; then
+    echo "Found system Node.js ($(node -v)). Running patch directly..."
+    echo
+    node applyAutoRetryContinueAllowPatch.js "$@"
+    EXIT_CODE=$?
+    echo
+    echo "========================================================"
+    if [ $EXIT_CODE -eq 0 ]; then
+        echo "Patch process finished successfully!"
+    else
+        echo "Patch process finished with errors (Code $EXIT_CODE)."
+    fi
+    echo "========================================================"
+    read -p "Press [Enter] to exit..."
+    exit $EXIT_CODE
+fi
+
 echo "This script will temporarily download Node.js to apply"
 echo "the patch without modifying your system installations."
 echo
@@ -15,9 +34,17 @@ TMP_DIR="$(pwd)/.tmp_node"
 echo "Creating temporary directory at $TMP_DIR..."
 mkdir -p "$TMP_DIR"
 
-echo "[1/3] Fetching latest Node.js release info..."
-# Fetch the filename of the latest Linux x64 binary tarball
-LATEST_TARBALL=$(curl -s https://nodejs.org/dist/latest/SHASUMS256.txt | grep 'linux-x64.tar.gz' | awk '{print $2}')
+# Determine architecture (x86_64 vs arm64/aarch64)
+ARCH=$(uname -m)
+if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+    NODE_ARCH="linux-arm64"
+else
+    NODE_ARCH="linux-x64"
+fi
+
+echo "[1/3] Fetching latest Node.js release info for $NODE_ARCH..."
+# Fetch the filename of the latest Linux binary tarball
+LATEST_TARBALL=$(curl -s https://nodejs.org/dist/latest/SHASUMS256.txt | grep "$NODE_ARCH.tar.gz" | awk '{print $2}')
 
 if [ -z "$LATEST_TARBALL" ]; then
     echo
