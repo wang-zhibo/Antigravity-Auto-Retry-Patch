@@ -3,6 +3,7 @@ const path = require('path');
 const { execSync } = require('child_process');
 const readline = require('readline');
 const os = require('os');
+const crypto = require('crypto');
 
 /**
  * Antigravity IDE Auto-Retry Patch Utility
@@ -99,8 +100,6 @@ function ensureSettings() {
         warn('Error updating settings.json: ' + e.message);
     }
 }
-
-const crypto = require('crypto');
 
 // --- Encryption Helpers ---
 const ENCRYPTION_ALGORITHM = 'aes-256-cbc';
@@ -1183,6 +1182,11 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
         }
 
         if (!agentView) {
+            const sendBtn = document.querySelector('button[data-testid="send-button"], button[data-tooltip-id="input-send-button-cancel-tooltip"]');
+            if (sendBtn) agentView = sendBtn.closest('.monaco-pane-view, .pane, .split-view-view, .composite, .antigravity-agent-side-panel') || sendBtn.parentElement;
+        }
+
+        if (!agentView) {
             const agentHeader = document.querySelector('.pane-header[aria-label*="Agent" i], .title[aria-label*="Agent" i]');
             if (agentHeader) agentView = agentHeader.closest('.monaco-pane-view, .pane, .split-view-view, .composite, .antigravity-agent-side-panel');
         }
@@ -1201,32 +1205,45 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
 
     ${includeContinue ? `
     /**
-     * Helper to find buttons by title, aria-label, or text.
+     * Helper to find buttons by title, aria-label, tooltip, test-id, or text.
      */
     function findButtonByAttribute(searchText) {
-        const agentView = getAgentView();
-        const elements = Array.from(agentView.querySelectorAll('button, a.monaco-button, div.monaco-button'));
+        const root = getAgentView() || document;
+        const elements = Array.from(root.querySelectorAll('button, a.monaco-button, div.monaco-button, [role="button"]'));
         const regex = new RegExp(searchText, 'i');
         return elements.find(el => {
             const title = el.getAttribute('title') || '';
             const ariaLabel = el.getAttribute('aria-label') || '';
+            const tooltipId = el.getAttribute('data-tooltip-id') || '';
+            const testId = el.getAttribute('data-testid') || '';
             const text = el.textContent || '';
-            return regex.test(title) || regex.test(ariaLabel) || regex.test(text);
+            return regex.test(title) || regex.test(ariaLabel) || regex.test(tooltipId) || regex.test(testId) || regex.test(text);
         }) || null;
     }
 
     /**
-     * Sets value and triggers events for an input field.
+     * Sets value and triggers events for an input field (supports Lexical ContentEditable & standard inputs).
      */
     function setInputValue(selector, value) {
-        const agentView = getAgentView();
-        const input = agentView.querySelector(selector);
+        const root = getAgentView() || document;
+        const input = root.querySelector(selector) || document.querySelector(selector);
         if (input) {
             writeDebugLog(\`Setting input value "\${value}" for selector "\${selector}"\`, input);
             input.focus();
-            input.value = value;
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-            input.dispatchEvent(new Event('change', { bubbles: true }));
+            if (input.isContentEditable || input.getAttribute('contenteditable') === 'true' || input.hasAttribute('data-lexical-editor')) {
+                try {
+                    document.execCommand('selectAll', false, null);
+                    document.execCommand('insertText', false, value);
+                } catch (e1) {}
+                try {
+                    input.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertText', data: value }));
+                    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
+                } catch (e2) {}
+            } else {
+                input.value = value;
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+            }
             return true;
         }
         return false;
@@ -1239,12 +1256,12 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
         if (isHandlingSequence) return;
         isHandlingSequence = true;
         
-        console.log('Antigravity IDE Auto-Retry: "Running" state detected for > 30s. Executing recovery...');
-        writeDebugLog('Starting recovery sequence due to "Running" hangup.');
+        console.log('Antigravity IDE Auto-Retry: Running/hangup timeout detected. Executing recovery...');
+        writeDebugLog('Starting recovery sequence due to hangup.');
 
         try {
-            // 1. Click Cancel
-            const cancelButton = findButtonByAttribute('Cancel');
+            // 1. Click Cancel button
+            const cancelButton = document.querySelector('button[data-tooltip-id="input-send-button-cancel-tooltip"], button[data-testid="send-button-cancel"]') || findButtonByAttribute('Cancel');
             if (cancelButton) {
                 console.log('Antigravity IDE Auto-Retry: Clicking Cancel button.');
                 writeDebugLog('Clicking Cancel button', cancelButton);
@@ -1254,15 +1271,18 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
             // 2. Wait 3 seconds
             await new Promise(r => setTimeout(r, 3000));
 
-            // 3. Type "continue"
-            const inputFound = setInputValue('div[contenteditable="true"][data-lexical-editor="true"], textarea[placeholder*="Ask anything" i], input[placeholder*="Ask anything" i]', 'continue');
+            // 3. Type "continue" into Lexical editor or text input
+            const inputSelector = 'div[contenteditable="true"][data-lexical-editor="true"], #antigravity\\\\.agentSidePanelInputBox [contenteditable="true"], div[contenteditable="true"], textarea[placeholder*="Ask anything" i], input[placeholder*="Ask anything" i]';
+            const inputFound = setInputValue(inputSelector, 'continue');
 
             // 4. Wait 3 seconds
             await new Promise(r => setTimeout(r, 3000));
 
             // 5. Click Send
-            const sendButton = findButtonByAttribute('Send') || getAgentView().querySelector('[data-testid="send-button"]');
-            if (sendButton) {
+            const sendButton = document.querySelector('button[data-testid="send-button"]') || 
+                               findButtonByAttribute('Send') || 
+                               document.querySelector('button[aria-label*="Send message" i]');
+            if (sendButton && !sendButton.disabled) {
                 console.log('Antigravity IDE Auto-Retry: Clicking Send button.');
                 writeDebugLog('Clicking Send button', sendButton);
                 sendButton.click();
@@ -1286,16 +1306,26 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
         intervalId = setInterval(() => {
             try {
                 const agentView = getAgentView();
-                const buttons = Array.from(agentView.querySelectorAll("button, a.monaco-button"));
-
+                const buttons = Array.from(document.querySelectorAll("button, a.monaco-button, [role='button']"));
 
                 ${includeRetry ? `
                 // --- Part 1: Auto Retry logic ---
                 const retryButton = buttons.find(button => {
-                    const text = (button.textContent || "").toLowerCase();
+                    if (clickedButtons.has(button) || button.disabled) return false;
+                    const text = (button.textContent || "").toLowerCase().trim();
+                    const testId = (button.getAttribute('data-testid') || "").toLowerCase();
+                    const ariaLabel = (button.getAttribute('aria-label') || "").toLowerCase();
+
+                    if (testId === 'browser-error-retry-button') {
+                        return true;
+                    }
+
                     return (text.includes("retry") || 
                            text.includes("wiederholen") || 
-                           text.includes("try again")) && !clickedButtons.has(button);
+                           text.includes("try again") || 
+                           (testId.includes("retry") && text.includes("reload")) ||
+                           ariaLabel.includes("retry") ||
+                           ariaLabel.includes("try again"));
                 });
                 if (retryButton && !(retryButton.disabled)) {
                     console.log("Antigravity IDE Auto-Retry: Found Retry button. Clicking...");
@@ -1307,9 +1337,57 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
  
                 ${includeAllow ? `
                 // --- Part 2: Auto Allow logic ---
+                // 2a. Handle interactive permission question cards (ask_permission / ask_question options)
+                const permissionOptions = Array.from(document.querySelectorAll('[data-testid="ask-question-option"], label[data-testid="ask-question-option"]'));
+                for (const option of permissionOptions) {
+                    if (clickedButtons.has(option)) continue;
+                    const text = (option.textContent || "").toLowerCase();
+                    const isAllowOption = text.includes("allow") || text.includes("yes, allow");
+                    if (isAllowOption) {
+                        const input = option.querySelector('input[type="radio"], input[type="checkbox"]');
+                        const isChecked = input ? input.checked : option.getAttribute('aria-checked') === 'true';
+                        if (!isChecked) {
+                            console.log("Antigravity IDE Auto-Retry: Selecting permission allow option: " + text.trim());
+                            writeDebugLog("Selecting permission allow option: " + text.trim(), option);
+                            if (input) input.click();
+                            else option.click();
+                        }
+
+                        // Submit via interaction-continue-button
+                        const container = option.closest('.no-focus-agent-input, .flex.flex-col') || document;
+                        const continueBtn = container.querySelector('button[data-testid="interaction-continue-button"]') || document.querySelector('button[data-testid="interaction-continue-button"]');
+                        if (continueBtn && !continueBtn.disabled && !clickedButtons.has(continueBtn)) {
+                            console.log("Antigravity IDE Auto-Retry: Confirming permission submission...");
+                            writeDebugLog("Clicking interaction continue/submit button", continueBtn);
+                            clickedButtons.add(option);
+                            clickedButtons.add(continueBtn);
+                            continueBtn.click();
+                        }
+                        break;
+                    }
+                }
+
+                // 2b. Handle traditional Allow / Approve buttons
                 const allowButton = buttons.find(button => {
-                    const text = (button.textContent || "").toLowerCase();
-                    return text.includes("allow") && !clickedButtons.has(button);
+                    if (clickedButtons.has(button) || button.disabled) return false;
+                    const text = (button.textContent || "").toLowerCase().trim();
+                    const testId = (button.getAttribute('data-testid') || "").toLowerCase();
+                    const ariaLabel = (button.getAttribute('aria-label') || "").toLowerCase();
+
+                    if (testId === 'subagent-approve' || testId === 'subagent_approve_button') {
+                        return true;
+                    }
+
+                    const isAllowText = text === 'allow' || 
+                                        text === 'allow once' || 
+                                        text === 'always allow' || 
+                                        text === 'allow this turn' || 
+                                        text === 'yes, allow' ||
+                                        text === 'approve' ||
+                                        text.startsWith('allow ') ||
+                                        ariaLabel.includes('allow') ||
+                                        ariaLabel.includes('approve');
+                    return isAllowText;
                 });
                 if (allowButton && !(allowButton.disabled)) {
                     console.log("Antigravity IDE Auto-Retry: Found Allow button. Clicking...");
@@ -1322,8 +1400,18 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
                 ${includeRun ? `
                 // --- Part 3: Auto Run logic ---
                 const runButton = buttons.find(button => {
-                    const text = (button.textContent || "").toLowerCase();
-                    return text.includes("run") && !clickedButtons.has(button);
+                    if (clickedButtons.has(button) || button.disabled) return false;
+                    const text = (button.textContent || "").toLowerCase().trim();
+                    const testId = (button.getAttribute('data-testid') || "").toLowerCase();
+
+                    if (testId === 'sidecar-action-run-now') return true;
+                    if (text.includes('running')) return false;
+
+                    return (text === 'run' || 
+                            text === 'run now' || 
+                            text === 'run command' || 
+                            text === 'always run' || 
+                            text.startsWith('run '));
                 });
                 if (runButton && !(runButton.disabled)) {
                     console.log("Antigravity IDE Auto-Retry: Found Run button. Clicking...");
@@ -1336,10 +1424,16 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
                 ${includeSubmit ? `
                 // --- Part 3b: Auto Submit logic ---
                 const submitButton = buttons.find(button => {
-                    const text = (button.textContent || "").toLowerCase();
-                    return (text.includes("submit") || 
-                           text.includes("absenden") || 
-                           text.includes("übermitteln")) && !clickedButtons.has(button);
+                    if (clickedButtons.has(button) || button.disabled) return false;
+                    const text = (button.textContent || "").toLowerCase().trim();
+                    const testId = (button.getAttribute('data-testid') || "").toLowerCase();
+
+                    if (testId === 'interaction-continue-button' && text.includes('submit')) return true;
+
+                    return (text === "submit" || 
+                           text === "absenden" || 
+                           text === "übermitteln" ||
+                           text.includes("submit"));
                 });
                 if (submitButton && !(submitButton.disabled)) {
                     console.log("Antigravity IDE Auto-Retry: Found Submit button. Clicking...");
@@ -1354,20 +1448,28 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
                 if (!isHandlingSequence) {
                     const viewElement = agentView === document ? document.body : agentView;
                     const bodyText = viewElement.innerText || '';
-                    const hasDots = /Running[.]{1,3}/.test(bodyText);
-                    const hasPlain = bodyText.includes('Running');
 
-                    if (hasDots) {
-                        hasSeenDots = true;
-                    }
+                    // 1. Check for cancel/stop button in the input area
+                    const hasCancelBtn = !!(document.querySelector('button[data-tooltip-id="input-send-button-cancel-tooltip"], button[data-testid="send-button-cancel"]') ||
+                                           document.querySelector('[data-testid="send-button-pending"]') ||
+                                           findButtonByAttribute('Cancel'));
 
-                    if (hasDots || (hasSeenDots && hasPlain)) {
+                    // 2. Check for dynamic status indicators
+                    const hasTextRunning = /Running[.]{1,3}/i.test(bodyText) || 
+                                           bodyText.includes('Running') ||
+                                           bodyText.includes('Thinking') ||
+                                           bodyText.includes('Working...') ||
+                                           bodyText.includes('Executing task:');
+
+                    const isRunning = hasCancelBtn || hasTextRunning;
+
+                    if (isRunning) {
                         runningCounter++;
                         if (runningCounter === 1) {
-                            writeDebugLog('Detected "Running" state. Starting counter.');
+                            writeDebugLog('Detected active running state. Starting counter.');
                         }
                         if (runningCounter >= 3000) { // 300 seconds
-                            writeDebugLog('Running counter reached 3000. Triggering recovery.');
+                            writeDebugLog('Running counter reached threshold (' + runningCounter + '). Triggering recovery.');
                             executeRecoverySequence();
                         }
                     } else {
@@ -1386,14 +1488,18 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
                 notifications.forEach(el => {
                     const text = el.textContent || "";
                     const lowerText = text.toLowerCase();
-                    const isCorruptMsg = lowerText.includes("antigravity") && 
+                    const isCorruptMsg = (lowerText.includes("antigravity") || lowerText.includes("installation") || lowerText.includes("安装")) && 
                                         (lowerText.includes("corrupt") || 
                                          lowerText.includes("beschädigt") || 
                                          lowerText.includes("reinstall") || 
-                                         lowerText.includes("neu installieren"));
+                                         lowerText.includes("neu installieren") ||
+                                         lowerText.includes("损坏") ||
+                                         lowerText.includes("重新安装") ||
+                                         lowerText.includes("corrompue") ||
+                                         lowerText.includes("danificada"));
                     if (isCorruptMsg) {
                         el.style.display = 'none';
-                        const toast = el.closest('.notification-toast-container');
+                        const toast = el.closest('.notification-toast-container, .notification-toast');
                         if (toast && toast.style.display !== 'none') {
                             writeDebugLog('Hiding corruption warning toast', toast);
                             toast.style.display = 'none';
@@ -1501,7 +1607,7 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
 
                 // --- Part 7: Auto-Restore Last Selected AI Model ---
                 if (enableRestoreModel) {
-                    const modelBtn = getAgentView().querySelector('button[aria-label*="Select model" i]');
+                    const modelBtn = document.querySelector('button[data-testid="model-selector-trigger"], button[aria-label*="Select model" i]');
                     if (modelBtn) {
                         let currentModel = '';
                         const ariaLabel = modelBtn.getAttribute('aria-label') || '';
@@ -1531,8 +1637,10 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
                                     showToast(savedModel);
                                 } else {
                                     const now = Date.now();
-                                    const parentDiv = modelBtn.closest('[aria-haspopup="dialog"]');
-                                    const isDropdownOpen = modelBtn.getAttribute('aria-expanded') === 'true' || (parentDiv && parentDiv.getAttribute('aria-expanded') === 'true');
+                                    const parentDiv = modelBtn.closest('[aria-haspopup="dialog"], [data-state]');
+                                    const isDropdownOpen = modelBtn.getAttribute('aria-expanded') === 'true' || 
+                                                           (parentDiv && parentDiv.getAttribute('aria-expanded') === 'true') ||
+                                                           !!document.querySelector('[data-testid="model-selector-panel"]');
 
                                     if (!isDropdownOpen) {
                                         if (pendingSubmenuOpen) {
@@ -1549,11 +1657,11 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
                                             openAttempts++;
                                         }
                                     } else {
-                                        const interactiveElements = Array.from(document.querySelectorAll('button, [role="menuitem"], [role="option"], .setting-dropdown-option, [class*="option" i], [class*="item" i]'));
+                                        const interactiveElements = Array.from(document.querySelectorAll('[data-testid="model-selector-item"], [data-testid="model-selector-effort-option"], button, [role="menuitem"], [role="option"], .setting-dropdown-option, [class*="option" i], [class*="item" i]'));
                                         
                                         let baseModel = savedModel;
                                         let tier = null;
-                                        const tierMatch = savedModel.match(/(?:\\s+|\\()?(High|Medium|Low)(?:\\))?$/i);
+                                        const tierMatch = savedModel.match(/(?:\\s+|\\()(High|Medium|Low)(?:\\))?$/i);
                                         if (tierMatch) {
                                             tier = tierMatch[1];
                                             baseModel = savedModel.substring(0, tierMatch.index).trim();
@@ -1561,7 +1669,11 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
 
                                         let tierOption = null;
                                         if (tier) {
-                                            tierOption = interactiveElements.find(el => el.textContent.trim().toLowerCase() === tier.toLowerCase());
+                                            tierOption = interactiveElements.find(el => {
+                                                const effortAttr = (el.getAttribute('data-effort') || '').toLowerCase();
+                                                if (effortAttr && effortAttr === tier.toLowerCase()) return true;
+                                                return el.textContent.trim().toLowerCase() === tier.toLowerCase();
+                                            });
                                         }
 
                                         if (tierOption) {
@@ -1575,6 +1687,8 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
                                             showToast(savedModel);
                                         } else if (tier) {
                                             let baseOption = interactiveElements.find(el => {
+                                                const modelLabel = el.getAttribute('data-model-label');
+                                                if (modelLabel && (modelLabel.includes(baseModel) || baseModel.includes(modelLabel))) return true;
                                                 const cleanText = el.textContent.trim().replace(/\\s+/g, ' ');
                                                 return cleanText.includes(baseModel) && cleanText.length < baseModel.length + 40;
                                             });
@@ -1615,6 +1729,8 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
                                             }
                                         } else {
                                             let targetOption = interactiveElements.find(el => {
+                                                const modelLabel = el.getAttribute('data-model-label');
+                                                if (modelLabel && (modelLabel.includes(savedModel) || savedModel.includes(modelLabel))) return true;
                                                 const cleanText = el.textContent.trim().replace(/\\s+/g, ' ');
                                                 return cleanText.includes(savedModel) && cleanText.length < savedModel.length + 40;
                                             });
@@ -1663,20 +1779,6 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
     }
     startAutoRetry();
     showToast('Antigravity IDE: Auto-Retry Patch <strong style="color: #a6e3a1">active</strong>', false, '#a6e3a1', 8000);
-
-    window.addEventListener('error', (event) => {
-        try {
-            const err = event.error || { message: event.message, stack: (event.filename || 'unknown') + ':' + (event.lineno || 0) + ':' + (event.colno || 0) };
-            showErrorToast(err);
-        } catch (e) {}
-    });
-
-    window.addEventListener('unhandledrejection', (event) => {
-        try {
-            const err = event.reason || { message: 'Unhandled Promise Rejection' };
-            showErrorToast(err);
-        } catch (e) {}
-    });
 })();
 </script>
 <!-- Antigravity IDE Auto-Retry Patch End -->
@@ -1945,6 +2047,67 @@ async function getInteractiveWorkbenchPath() {
     return null;
 }
 
+/**
+ * Finds product.json by walking up the directory tree from workbench.html.
+ */
+function findProductJson(startPath) {
+    let currentDir = path.dirname(startPath);
+    while (currentDir && currentDir !== path.parse(currentDir).root) {
+        const candidate = path.join(currentDir, 'product.json');
+        if (fs.existsSync(candidate)) {
+            return candidate;
+        }
+        currentDir = path.dirname(currentDir);
+    }
+    return null;
+}
+
+/**
+ * Computes base64 SHA256 checksum without padding (VS Code standard).
+ */
+function computeFileChecksum(content) {
+    const buf = typeof content === 'string' ? Buffer.from(content, 'utf8') : content;
+    return crypto.createHash('sha256').update(buf).digest('base64').replace(/=+$/, '');
+}
+
+/**
+ * Updates the workbench.html checksum in product.json so Antigravity IDE integrity check passes.
+ */
+function updateProductChecksum(workbenchPath, newHtmlContent) {
+    try {
+        const productPath = findProductJson(workbenchPath);
+        if (!productPath) return;
+
+        const productRaw = fs.readFileSync(productPath, 'utf8');
+        const product = JSON.parse(productRaw);
+        if (!product.checksums) return;
+
+        const relativeKey = 'vs/code/electron-browser/workbench/workbench.html';
+        if (product.checksums[relativeKey] !== undefined) {
+            const newHash = computeFileChecksum(newHtmlContent);
+            if (product.checksums[relativeKey] === newHash) return;
+
+            product.checksums[relativeKey] = newHash;
+            const updatedJson = JSON.stringify(product, null, '\t') + '\n';
+
+            try {
+                fs.accessSync(productPath, fs.constants.W_OK);
+                fs.writeFileSync(productPath, updatedJson);
+                log(`Updated product.json checksum for workbench.html to ${newHash}`);
+            } catch (e) {
+                if (process.platform === 'linux' || process.platform === 'darwin') {
+                    const tempProductPath = path.join(process.env.TMPDIR || '/tmp', 'product.json');
+                    fs.writeFileSync(tempProductPath, updatedJson);
+                    execSync(`sudo cp "${tempProductPath}" "${productPath}"`);
+                    log(`Updated product.json checksum for workbench.html using sudo`);
+                }
+            }
+        }
+    } catch (e) {
+        warn(`Could not update product.json checksum: ${e.message}`);
+    }
+}
+
 async function applyPatch() {
     log('--- Antigravity IDE Retry Patch Utility ---');
 
@@ -1997,7 +2160,9 @@ async function applyPatch() {
         if (choice === 'reset_all') {
             if (fs.existsSync(backupPath)) {
                 log(`Found backup at ${backupPath}. Using it as clean base`);
-                fs.writeFileSync(workbenchPath, fs.readFileSync(backupPath))
+                const backupContent = fs.readFileSync(backupPath, 'utf8');
+                fs.writeFileSync(workbenchPath, backupContent);
+                updateProductChecksum(workbenchPath, backupContent);
                 log('------------------------------------------');
                 log('Reset successfully applied!');
                 log('Please restart Antigravity IDE to see the changes.');
@@ -2075,7 +2240,21 @@ async function applyPatch() {
         // 4. Write back with privilege handling
         log('Writing patched content back to workbench.html...');
 
-        if (isElevated()) {
+        const canWriteDirectly = () => {
+            try {
+                fs.accessSync(workbenchPath, fs.constants.W_OK);
+                if (fs.existsSync(backupPath)) {
+                    fs.accessSync(backupPath, fs.constants.W_OK);
+                } else {
+                    fs.accessSync(path.dirname(backupPath), fs.constants.W_OK);
+                }
+                return true;
+            } catch (e) {
+                return false;
+            }
+        };
+
+        if (isElevated() || canWriteDirectly()) {
             log('Running with sufficient privileges. Writing directly...');
             fs.writeFileSync(workbenchPath, html);
             // Also ensure backup exists if it didn't before (and we have permission now)
@@ -2102,33 +2281,13 @@ async function applyPatch() {
                 execSync(commands);
                 log('Files moved successfully using sudo.');
             } else if (process.platform === 'win32') {
-                const canWrite = () => {
-                    try {
-                        fs.accessSync(workbenchPath, fs.constants.W_OK);
-                        // If backup exists, check if we can write to it too
-                        if (fs.existsSync(backupPath)) {
-                            fs.accessSync(backupPath, fs.constants.W_OK);
-                        }
-                        return true;
-                    } catch (e) {
-                        return false;
-                    }
-                };
-                if (canWrite()) {
-                    log('Running with sufficient privileges');
-                    fs.writeFileSync(workbenchPath, html);
-                    // Also ensure backup exists if it didn't before (and we have permission now)
-                    if (!fs.existsSync(backupPath)) {
-                        fs.writeFileSync(backupPath, cleanHtml);
-                    }
-                    log('File written successfully.');
-                }
-                else {
-                    error('Insufficient privileges to modify the file. Please run this command prompt or terminal as Administrator.');
-                    process.exit(1);
-                }
+                error('Insufficient privileges to modify the file. Please run this command prompt or terminal as Administrator.');
+                process.exit(1);
             }
         }
+
+        // Update product.json checksum so IDE integrity check passes natively
+        updateProductChecksum(workbenchPath, html);
 
         log('------------------------------------------');
         log('Patch successfully applied!');
