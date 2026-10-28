@@ -23,8 +23,10 @@ When working with AI agents or long-running tasks in Antigravity IDE, you might 
 - **Interactive Configuration**: Choose exactly which features to enable during installation.
 - **Cross-Platform Support**: Works on Windows, Linux, and macOS.
 - **Safety First**: 
-  - Automatically creates a backup (`workbench.html.bak`) before making changes.
+  - Automatically creates backups (`workbench.html.bak` and `workbench-jetski-agent.html.bak`) before making changes.
+  - Automatically updates `product.json` integrity checksums so Antigravity IDE passes integrity checks natively without corruption warnings.
   - Safely modifies the Content Security Policy (CSP) to allow the injection.
+  - Supports both classic single-frame and new dedicated agent window (`workbench-jetski-agent.html`) architecture in modern Antigravity IDE releases.
   - Handles elevation (sudo/Admin) elegantly.
 
 ## Prerequisites
@@ -78,7 +80,7 @@ After selecting the main mode, you will be prompted with interactive questions t
 After the script reports success, simply restart the Antigravity IDE. The selected logic will now be active in the workbench.
 
 ## How it Works
-The script injects a small, lightweight JavaScript snippet into the `workbench.html` file. This snippet:
+The script injects a small, lightweight JavaScript snippet into the `workbench.html` and `workbench-jetski-agent.html` files. This snippet:
 1. Runs in the main UI thread.
 2. Scans for buttons and monitors state every **100ms**.
 3. Checks for specific button text (case-insensitive) and uses `WeakSet` to ensure each button is clicked only once when appropriate.

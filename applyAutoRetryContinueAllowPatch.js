@@ -319,6 +319,7 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
     }
 
     let intervalId = null;
+    let lastSubmitTime = 0;
     const clickedButtons = new WeakSet();
     ${includeContinue ? 'let runningCounter = 0;' : ''}
     ${includeContinue ? 'let hasSeenDots = false;' : ''}
@@ -1179,6 +1180,10 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
     }
 
     function getAgentView() {
+        if (typeof window !== 'undefined' && window.location && (window.location.href.includes('workbench-jetski-agent') || window.location.pathname.includes('jetski'))) {
+            return document.body;
+        }
+
         let agentView = document.querySelector('.antigravity-agent-side-panel');
 
         if (!agentView) {
@@ -1384,7 +1389,13 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
                 if (permissionOptions.length > 0) {
                     const allowOption = permissionOptions.find(option => {
                         const text = (option.textContent || "").toLowerCase();
-                        return text.includes("allow this time") || text.includes("yes, allow") || text.includes("allow");
+                        return text.includes("allow this time") || 
+                               text.includes("yes, allow") || 
+                               text.includes("allow") || 
+                               text.includes("允许") ||
+                               text.includes("总是允许") ||
+                               text.includes("recommended") || 
+                               text.includes("推荐");
                     }) || permissionOptions[0];
 
                     if (allowOption) {
@@ -1395,22 +1406,23 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
                             console.log("Antigravity IDE Auto-Retry: Selecting permission allow option: " + allowOption.textContent.trim());
                             writeDebugLog("Selecting permission allow option: " + allowOption.textContent.trim(), allowOption);
                             if (input) {
-                                input.checked = true;
-                                input.dispatchEvent(new Event('change', { bubbles: true }));
                                 input.click();
                             } else {
                                 allowOption.click();
                             }
+                            try {
+                                allowOption.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+                            } catch (e) {}
                         }
                     }
 
                     // Confirm via interaction-continue-button (Submit / Continue)
                     const continueBtn = document.querySelector('button[data-testid="interaction-continue-button"]');
                     if (continueBtn && !continueBtn.disabled && !isSystemArea(continueBtn)) {
-                        if (!clickedButtons.has(continueBtn)) {
+                        if (Date.now() - lastSubmitTime > 500) {
+                            lastSubmitTime = Date.now();
                             console.log("Antigravity IDE Auto-Retry: Confirming permission submission (clicking Submit)...");
                             writeDebugLog("Clicking interaction continue/submit button", continueBtn);
-                            clickedButtons.add(continueBtn);
                             continueBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
                             continueBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
                             continueBtn.click();
@@ -1435,9 +1447,14 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
                                         text === 'allow this turn' || 
                                         text === 'yes, allow' ||
                                         text === 'approve' ||
+                                        text === '允许' ||
+                                        text === '总是允许' ||
+                                        text === '确定' ||
+                                        text === '同意' ||
                                         text.startsWith('allow ') ||
                                         ariaLabel.includes('allow') ||
-                                        ariaLabel.includes('approve');
+                                        ariaLabel.includes('approve') ||
+                                        ariaLabel.includes('允许');
                     return isAllowText;
                 });
                 if (allowButton && !(allowButton.disabled)) {
@@ -1475,24 +1492,30 @@ function generateInjectionScript(choice, hideCorruption, enableDebug, enableSshA
                 ${includeSubmit ? `
                 // --- Part 3b: Auto Submit logic ---
                 const submitButton = buttons.find(button => {
-                    if (clickedButtons.has(button) || button.disabled || isSystemArea(button)) return false;
+                    if (button.disabled || isSystemArea(button)) return false;
                     const text = (button.textContent || "").toLowerCase().trim();
                     const testId = (button.getAttribute('data-testid') || "").toLowerCase();
 
                     if (testId === 'interaction-continue-button') return true;
 
                     return (text === "submit" || 
+                           text === "continue" ||
                            text === "absenden" || 
                            text === "übermitteln" ||
-                           text.includes("submit"));
+                           text === "提交" ||
+                           text === "继续" ||
+                           text.includes("submit") ||
+                           text.includes("continue"));
                 }) || document.querySelector('button[data-testid="interaction-continue-button"]');
-                if (submitButton && !submitButton.disabled && !clickedButtons.has(submitButton) && !isSystemArea(submitButton)) {
-                    console.log("Antigravity IDE Auto-Retry: Found Submit button. Clicking...");
-                    writeDebugLog('Clicking Submit button', submitButton);
-                    clickedButtons.add(submitButton);
-                    submitButton.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-                    submitButton.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-                    submitButton.click();
+                if (submitButton && !submitButton.disabled && !isSystemArea(submitButton)) {
+                    if (Date.now() - lastSubmitTime > 500) {
+                        lastSubmitTime = Date.now();
+                        console.log("Antigravity IDE Auto-Retry: Found Submit button. Clicking...");
+                        writeDebugLog('Clicking Submit button', submitButton);
+                        submitButton.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                        submitButton.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+                        submitButton.click();
+                    }
                 }
                 ` : ''}
 
@@ -2023,11 +2046,17 @@ function resolveManualPath(inputPath) {
     if (!inputPath) return null;
     const cleaned = inputPath.trim().replace(/^['"]|['"]$/g, ''); // remove quotes if any
     
-    // Check if the path itself is workbench.html
+    // Check if the path itself is workbench.html or workbench-jetski-agent.html
     if (fs.existsSync(cleaned)) {
         const stat = fs.statSync(cleaned);
-        if (stat.isFile() && path.basename(cleaned).toLowerCase() === 'workbench.html') {
-            return cleaned;
+        if (stat.isFile()) {
+            const base = path.basename(cleaned).toLowerCase();
+            if (base === 'workbench.html') {
+                return cleaned;
+            }
+            if (base === 'workbench-jetski-agent.html') {
+                return path.join(path.dirname(cleaned), 'workbench.html');
+            }
         }
     }
     
@@ -2125,9 +2154,39 @@ function computeFileChecksum(content) {
 }
 
 /**
- * Updates the workbench.html checksum in product.json so Antigravity IDE integrity check passes.
+ * Injects CSP 'unsafe-inline' and the patch script into an HTML file.
  */
-function updateProductChecksum(workbenchPath, newHtmlContent) {
+function preparePatchedHtml(cleanHtml, injectionScript) {
+    let html = cleanHtml;
+
+    // 1. Inject 'unsafe-inline' into CSP (Content Security Policy)
+    html = html.replace(/(script-src\s+[^;]*)/, (match) => {
+        if (!match.includes("'unsafe-inline'")) {
+            log('Updating CSP to allow injected script (adding \'unsafe-inline\')...');
+            return match + " 'unsafe-inline'";
+        }
+        return match;
+    });
+
+    // 2. Inject the script before </body> or at the end of body
+    if (html.includes('</body>')) {
+        log('Injecting script before </body> tag...');
+        html = html.replace('</body>', injectionScript + '</body>');
+    } else if (html.includes('<body')) {
+        log('Injecting script after <body ...> tag...');
+        html = html.replace(/(<body[^>]*>)/, (match) => match + injectionScript);
+    } else {
+        warn('Could not find <body> tag, appending script to the end of file.');
+        html += injectionScript;
+    }
+    return html;
+}
+
+/**
+ * Updates the checksums in product.json so Antigravity IDE integrity check passes natively.
+ * updates can be a single { relKey, content } or an array of { relKey, content }.
+ */
+function updateProductChecksums(workbenchPath, updates) {
     try {
         const productPath = findProductJson(workbenchPath);
         if (!productPath) return;
@@ -2136,24 +2195,31 @@ function updateProductChecksum(workbenchPath, newHtmlContent) {
         const product = JSON.parse(productRaw);
         if (!product.checksums) return;
 
-        const relativeKey = 'vs/code/electron-browser/workbench/workbench.html';
-        if (product.checksums[relativeKey] !== undefined) {
-            const newHash = computeFileChecksum(newHtmlContent);
-            if (product.checksums[relativeKey] === newHash) return;
+        const list = Array.isArray(updates) ? updates : [updates];
+        let hasChanges = false;
 
-            product.checksums[relativeKey] = newHash;
+        for (const item of list) {
+            if (product.checksums[item.relKey] !== undefined) {
+                const newHash = computeFileChecksum(item.content);
+                if (product.checksums[item.relKey] !== newHash) {
+                    product.checksums[item.relKey] = newHash;
+                    hasChanges = true;
+                    log(`Updated product.json checksum for ${path.basename(item.relKey)} to ${newHash}`);
+                }
+            }
+        }
+
+        if (hasChanges) {
             const updatedJson = JSON.stringify(product, null, '\t') + '\n';
-
             try {
                 fs.accessSync(productPath, fs.constants.W_OK);
                 fs.writeFileSync(productPath, updatedJson);
-                log(`Updated product.json checksum for workbench.html to ${newHash}`);
             } catch (e) {
                 if (process.platform === 'linux' || process.platform === 'darwin') {
                     const tempProductPath = path.join(process.env.TMPDIR || '/tmp', 'product.json');
                     fs.writeFileSync(tempProductPath, updatedJson);
                     execSync(`sudo cp "${tempProductPath}" "${productPath}"`);
-                    log(`Updated product.json checksum for workbench.html using sudo`);
+                    log(`Updated product.json checksums using sudo`);
                 }
             }
         }
@@ -2207,100 +2273,119 @@ async function applyPatch() {
         return;
     }
 
-    const backupPath = workbenchPath + '.bak';
-    let cleanHtml = '';
-    //reset all
-    try {
-        if (choice === 'reset_all') {
-            if (fs.existsSync(backupPath)) {
-                log(`Found backup at ${backupPath}. Using it as clean base`);
-                const backupContent = fs.readFileSync(backupPath, 'utf8');
-                fs.writeFileSync(workbenchPath, backupContent);
-                updateProductChecksum(workbenchPath, backupContent);
+    // Identify targets to patch (both workbench.html and workbench-jetski-agent.html if present)
+    const targets = [
+        {
+            filePath: workbenchPath,
+            relKey: 'vs/code/electron-browser/workbench/workbench.html',
+            name: 'workbench.html'
+        }
+    ];
+
+    const agentHtmlPath = path.join(path.dirname(workbenchPath), 'workbench-jetski-agent.html');
+    if (fs.existsSync(agentHtmlPath)) {
+        targets.push({
+            filePath: agentHtmlPath,
+            relKey: 'vs/code/electron-browser/workbench/workbench-jetski-agent.html',
+            name: 'workbench-jetski-agent.html'
+        });
+    }
+
+    // Reset all mode
+    if (choice === 'reset_all') {
+        try {
+            const restoredUpdates = [];
+            for (const target of targets) {
+                const bak = target.filePath + '.bak';
+                if (fs.existsSync(bak)) {
+                    log(`Found backup at ${bak}. Restoring ${target.name}...`);
+                    const bakContent = fs.readFileSync(bak, 'utf8');
+                    try {
+                        fs.writeFileSync(target.filePath, bakContent);
+                    } catch (e) {
+                        if (process.platform === 'linux' || process.platform === 'darwin') {
+                            execSync(`sudo cp "${bak}" "${target.filePath}"`);
+                        } else {
+                            throw e;
+                        }
+                    }
+                    restoredUpdates.push({ relKey: target.relKey, content: bakContent });
+                } else {
+                    warn(`Backup for ${target.name} not found at ${bak}, skipping.`);
+                }
+            }
+
+            if (restoredUpdates.length > 0) {
+                updateProductChecksums(workbenchPath, restoredUpdates);
                 log('------------------------------------------');
                 log('Reset successfully applied!');
                 log('Please restart Antigravity IDE to see the changes.');
                 log('------------------------------------------');
+            } else {
+                warn('No backups found, reset aborted.');
             }
-            else {
-                console.log('Backup does not exist, reset aborted')
-                return;
+        } catch (e) {
+            if (!isElevated()) error('You do not have sufficient privileges. Run the script again as administrator');
+            else if (e.code === 'EACCES') {
+                warn('Permission denied while writing file.');
+            } else {
+                throw e;
             }
-            return;
-        }
-    } catch (e) {
-        if (!isElevated()) error('You do not have sufficient privileges. Run the script again as administrator');
-        else if (e.code === 'EACCES') {
-            warn('Permission denied while writing file.');
-        } else {
-            throw e;
         }
         return;
     }
-    //normal patching proces
+
+    // Normal patching process
     try {
-        // 1. Determine clean base content
-        if (fs.existsSync(backupPath)) {
-            log(`Found backup at ${backupPath}. Using it as clean base to prevent double patching.`);
-            cleanHtml = fs.readFileSync(backupPath, 'utf8');
-        } else {
-            log(`No backup found. Reading current file and creating backup at ${backupPath}...`);
-            cleanHtml = fs.readFileSync(workbenchPath, 'utf8');
+        const injectionScript = generateInjectionScript(choice, hideCorruption, enableDebug, enableSshAutoLogin, sshPasswords, enableRestoreModel);
+        const preparedTargets = [];
 
-            // Initial check to make sure we don't backup a file that's already patched
-            if (cleanHtml.includes('Antigravity Auto-Retry Patch') || cleanHtml.includes('Antigravity IDE Auto-Retry Patch')) {
-                error('The current workbench.html already contains a patch but no .bak file exists.');
-                error('To be safe, please manually restore a clean workbench.html or create a workbench.html.bak from a clean version.');
-                return;
-            }
+        for (const target of targets) {
+            const bak = target.filePath + '.bak';
+            let cleanHtml = '';
 
-            try {
-                fs.writeFileSync(backupPath, cleanHtml);
-                log('Backup created successfully.');
-            } catch (e) {
-                if (e.code === 'EACCES') {
-                    warn('Permission denied while creating backup. We will attempt to write the backup using elevated privileges during the final step.');
-                } else {
-                    throw e;
+            if (fs.existsSync(bak)) {
+                log(`Found backup at ${bak}. Using it as clean base for ${target.name}.`);
+                cleanHtml = fs.readFileSync(bak, 'utf8');
+            } else {
+                log(`No backup found for ${target.name}. Reading current file and creating backup at ${bak}...`);
+                cleanHtml = fs.readFileSync(target.filePath, 'utf8');
+
+                if (cleanHtml.includes('Antigravity Auto-Retry Patch') || cleanHtml.includes('Antigravity IDE Auto-Retry Patch')) {
+                    error(`The current ${target.name} already contains a patch but no .bak file exists.`);
+                    error(`To be safe, please manually restore a clean ${target.name} or create ${target.name}.bak from a clean version.`);
+                    return;
+                }
+
+                try {
+                    fs.writeFileSync(bak, cleanHtml);
+                    log(`Backup created successfully for ${target.name}.`);
+                } catch (e) {
+                    if (e.code === 'EACCES') {
+                        warn(`Permission denied while creating backup for ${target.name}. Will attempt elevation during writing.`);
+                    } else {
+                        throw e;
+                    }
                 }
             }
+
+            log(`Preparing patched content for ${target.name}...`);
+            const patchedHtml = preparePatchedHtml(cleanHtml, injectionScript);
+            preparedTargets.push({
+                ...target,
+                bakPath: bak,
+                cleanHtml,
+                patchedHtml
+            });
         }
 
-        log('Preparing patched content...');
-        let html = cleanHtml;
-        const injectionScript = generateInjectionScript(choice, hideCorruption, enableDebug, enableSshAutoLogin, sshPasswords, enableRestoreModel);
-
-        // 2. Inject 'unsafe-inline' into CSP (Content Security Policy)
-        html = html.replace(/(script-src\s+[^;]*)/, (match) => {
-            if (!match.includes("'unsafe-inline'")) {
-                log('Updating CSP to allow injected script (adding \'unsafe-inline\')...');
-                return match + " 'unsafe-inline'";
-            }
-            return match;
-        });
-
-        // 3. Inject the script before </body> or at the end of body
-        if (html.includes('</body>')) {
-            log('Injecting script before </body> tag...');
-            html = html.replace('</body>', injectionScript + '</body>');
-        } else if (html.includes('<body')) {
-            log('Injecting script after <body ...> tag...');
-            html = html.replace(/(<body[^>]*>)/, (match) => match + injectionScript);
-        } else {
-            warn('Could not find <body> tag, appending script to the end of file.');
-            html += injectionScript;
-        }
-
-        // 4. Write back with privilege handling
-        log('Writing patched content back to workbench.html...');
-
-        const canWriteDirectly = () => {
+        const canWriteTargetDirectly = (target) => {
             try {
-                fs.accessSync(workbenchPath, fs.constants.W_OK);
-                if (fs.existsSync(backupPath)) {
-                    fs.accessSync(backupPath, fs.constants.W_OK);
+                fs.accessSync(target.filePath, fs.constants.W_OK);
+                if (fs.existsSync(target.bakPath)) {
+                    fs.accessSync(target.bakPath, fs.constants.W_OK);
                 } else {
-                    fs.accessSync(path.dirname(backupPath), fs.constants.W_OK);
+                    fs.accessSync(path.dirname(target.bakPath), fs.constants.W_OK);
                 }
                 return true;
             } catch (e) {
@@ -2308,43 +2393,50 @@ async function applyPatch() {
             }
         };
 
-        if (isElevated() || canWriteDirectly()) {
-            log('Running with sufficient privileges. Writing directly...');
-            fs.writeFileSync(workbenchPath, html);
-            // Also ensure backup exists if it didn't before (and we have permission now)
-            if (!fs.existsSync(backupPath)) {
-                fs.writeFileSync(backupPath, cleanHtml);
-            }
-            log('File written successfully.');
-        } else {
-            log('Not running with elevated privileges. Attempting to use platform-specific elevation...');
+        const allCanWriteDirectly = preparedTargets.every(t => canWriteTargetDirectly(t));
 
-            if (process.platform === 'linux' || process.platform === 'darwin') {
-                const tempPath = path.join(process.env.TMPDIR || '/tmp', 'workbench_patched.html');
-                const tempBakPath = path.join(process.env.TMPDIR || '/tmp', 'workbench.html.bak');
-
-                fs.writeFileSync(tempPath, html);
-                let commands = `sudo cp "${tempPath}" "${workbenchPath}"`;
-
-                if (!fs.existsSync(backupPath)) {
-                    fs.writeFileSync(tempBakPath, cleanHtml);
-                    commands += ` && sudo cp "${tempBakPath}" "${backupPath}"`;
+        if (isElevated() || allCanWriteDirectly) {
+            log('Running with sufficient privileges. Writing files directly...');
+            for (const t of preparedTargets) {
+                log(`Writing patched content back to ${t.name}...`);
+                fs.writeFileSync(t.filePath, t.patchedHtml);
+                if (!fs.existsSync(t.bakPath)) {
+                    fs.writeFileSync(t.bakPath, t.cleanHtml);
                 }
+            }
+            log('All files written successfully.');
+        } else {
+            log('Not running with elevated privileges. Attempting platform-specific elevation...');
+            if (process.platform === 'linux' || process.platform === 'darwin') {
+                const commands = [];
+                for (let i = 0; i < preparedTargets.length; i++) {
+                    const t = preparedTargets[i];
+                    const tempPath = path.join(process.env.TMPDIR || '/tmp', `patched_${i}_${t.name}`);
+                    const tempBakPath = path.join(process.env.TMPDIR || '/tmp', `bak_${i}_${t.name}`);
 
+                    fs.writeFileSync(tempPath, t.patchedHtml);
+                    commands.push(`sudo cp "${tempPath}" "${t.filePath}"`);
+
+                    if (!fs.existsSync(t.bakPath)) {
+                        fs.writeFileSync(tempBakPath, t.cleanHtml);
+                        commands.push(`sudo cp "${tempBakPath}" "${t.bakPath}"`);
+                    }
+                }
                 log('Executing sudo to copy files to system path...');
-                execSync(commands);
+                execSync(commands.join(' && '));
                 log('Files moved successfully using sudo.');
             } else if (process.platform === 'win32') {
-                error('Insufficient privileges to modify the file. Please run this command prompt or terminal as Administrator.');
+                error('Insufficient privileges to modify the files. Please run terminal as Administrator.');
                 process.exit(1);
             }
         }
 
-        // Update product.json checksum so IDE integrity check passes natively
-        updateProductChecksum(workbenchPath, html);
+        // Update product.json checksums for all patched targets
+        updateProductChecksums(workbenchPath, preparedTargets.map(t => ({ relKey: t.relKey, content: t.patchedHtml })));
 
         log('------------------------------------------');
-        log('Patch successfully applied!');
+        log('Patch successfully applied to all targets:');
+        preparedTargets.forEach(t => log(` - ${t.name}`));
         log('Please restart Antigravity IDE to see the changes.');
         log('------------------------------------------');
 
