@@ -1,0 +1,112 @@
+# Antigravity IDE Auto-Retry & Recovery Patch
+
+This utility provides a robust, cross-platform patch for the **Antigravity IDE** (VS Code based) that automates common UI interactions to keep your AI agents running smoothly.
+
+## Why is this useful?
+When working with AI agents or long-running tasks in Antigravity IDE, you might encounter transient network failures, quota limits, or "Running" hangups. This script automates the process of clicking "Retry", "Allow", "Run", and "Submit" buttons, and even handles situations where the agent appears to be stuck.
+ 
+## Features
+- **Auto-Retry**: Automatically clicks "Retry", "Try Again", or "Wiederholen" buttons.
+- **Auto-Continue (Recovery Sequence)**: Monitors the "Running..." state. If it persists for more than 30 seconds, the script automatically:
+  1. Clicks **Cancel**.
+  2. Waits 3 seconds.
+  3. Types **"continue"** into the chat input.
+  4. Waits 3 seconds.
+  5. Clicks **Send**.
+- **Auto-Allow**: Automatically clicks "Allow" buttons. This ensures that the internal test browser runs continuously without constantly asking for permission when the Antigravity IDE uses it.
+- **Auto-Run**: Automatically clicks "Run" buttons.
+- **Auto-Submit**: Automatically clicks "Submit", "Absenden", or "Übermitteln" buttons.
+- **Auto-Restore-Last-AI-Model**: Automatically remembers the last selected AI model (e.g., `Gemini 3.5 Flash (High)`) and restores/selects it when the Antigravity IDE starts up as soon as it becomes available.
+- **Remote SSH Auto-Login**: Automatically injects passwords for remote SSH connections.
+  - **AES-256 Encryption**: Your passwords are saved locally in an encrypted format, bound to your specific machine and user account.
+- **Auto-Detection & Persistence**: The patcher automatically detects your current configuration and pre-fills the menu, so you don't have to remember your previous settings.
+- **Interactive Configuration**: Choose exactly which features to enable during installation.
+- **Cross-Platform Support**: Works on Windows, Linux, and macOS.
+- **Safety First**: 
+  - Automatically creates a backup (`workbench.html.bak`) before making changes.
+  - Safely modifies the Content Security Policy (CSP) to allow the injection.
+  - Handles elevation (sudo/Admin) elegantly.
+
+## Prerequisites
+- **Antigravity IDE**: The IDE must be installed.
+- *(Optional)* **Node.js**: Only required if you choose the manual installation method.
+
+## Installation / Usage
+
+### Step 1: Run the patch
+
+**Option A: Automatic One-Click Scripts (Recommended)**
+These scripts temporarily download a portable version of Node.js to apply the patch, leaving your system completely clean without a permanent Node.js installation.
+
+* **Windows**: Simply double-click `install_windows.bat`. *(Note: If you receive a "Code 1" or permission error, right-click the file and select **"Run as Administrator"**)*.
+* **macOS**: 
+  1. Open a terminal in the folder and make the script executable: `chmod +x install_mac.command`
+  2. Double-click `install_mac.command` in Finder.
+* **Linux**:
+  1. Open a terminal in the folder and make the script executable: `chmod +x install_linux.sh`
+  2. Run `./install_linux.sh` in the terminal (or double-click if your file manager supports it).
+
+**Option B: Manual Installation (Requires installed Node.js)**
+If you already have Node.js installed globally, open your terminal in the folder containing `applyAutoRetryContinueAllowPatch.js` and execute:
+* **Windows**: Right-click your terminal and select **"Run as Administrator"**, then run `node applyAutoRetryContinueAllowPatch.js`
+* **Linux / macOS**: Run `sudo node applyAutoRetryContinueAllowPatch.js`
+
+**Option C: Specifying a Custom Antigravity IDE Path (Optional)**
+If your Antigravity IDE is installed in a non-standard directory, you can specify its path as an argument to the installation scripts or the Node script:
+* **Windows (Script)**: `install_windows.bat --path "C:\Path\To\Antigravity"` (or run `install_windows.bat "C:\Path\To\Antigravity"`)
+* **Linux / macOS (Script)**: `./install_linux.sh --path "/custom/path/to/antigravity"` or `./install_mac.command --path "/custom/path/to/antigravity"`
+* **Manual execution**: `node applyAutoRetryContinueAllowPatch.js --path "/custom/path/to/antigravity"`
+
+*Note: You can specify either the path to the main directory of the IDE (where `resources` or the app container resides) or the path to the `workbench.html` file directly. If no path is specified and the utility cannot automatically find the installation directory, it will ask you to specify the path interactively.*
+
+
+### Step 2: Configure your options
+The script will present a menu. Choose the desired combination of features:
+1) All (Retry + Continue + Allow + Run + Submit) [Default]
+2) Retry + Continue + Allow + Submit
+3) Retry + Allow + Submit
+...and more.
+
+After selecting the main mode, you will be prompted with interactive questions to:
+- Enable **Remote SSH Auto-Login** (and input your passwords).
+- Hide the **"corrupt installation"** warning message.
+- Enable **"Auto-Restore-Last-AI-Model"** to automatically select your last used model.
+- Enable **Debug Mode** for detailed log messages.
+
+
+### Step 3: Restart Antigravity IDE
+After the script reports success, simply restart the Antigravity IDE. The selected logic will now be active in the workbench.
+
+## How it Works
+The script injects a small, lightweight JavaScript snippet into the `workbench.html` file. This snippet:
+1. Runs in the main UI thread.
+2. Scans for buttons and monitors state every **100ms**.
+3. Checks for specific button text (case-insensitive) and uses `WeakSet` to ensure each button is clicked only once when appropriate.
+4. Tracks the duration of the "Running" state to trigger the recovery sequence if a timeout is reached.
+5. Checks for specific notification text and hides the corrupt installation notification.
+6. **Remote SSH Auto-Login**:
+   - Detects password prompts in the Quick Input widget.
+   - Extracts host information and retrieves the matching **encrypted password** from your local database.
+   - Injects the password and waits for the window to regain focus (e.g., after a CMD window has closed).
+   - Once you click back into Antigravity IDE, it waits 100ms and sends the "Enter" command to complete the login.
+7. **Auto-Restore-Last-AI-Model**:
+   - Detects the active AI model dropdown/button in the chat view.
+   - Saves any user-selected model changes to the browser's `localStorage` (as `antigravity-patched-last-model`).
+   - On IDE startup, if a saved model is found, it automatically clicks the model selector to open the dropdown and selects the saved model.
+   - If the target model option is temporarily unavailable (e.g., while loading), it closes the dropdown and retries (up to 3 times) before giving up.
+
+## Security & Privacy
+The optional **Remote SSH Auto-Login** feature is designed with security in mind:
+* **AES-256 Encryption**: Passwords are not stored in plain text. They are encrypted using the AES-256-CBC algorithm.
+* **System Storage**: Passwords are saved in your system's application data folder (e.g., `%APPDATA%\Antigravity-IDE-Auto-Retry-Patch` on Windows), keeping them separate from the project files and safe from accidental Git uploads.
+* **Machine-Bound**: The encryption key is derived from your local system account and hostname. This means the `ssh_passwords.json` file is useless if copied to another machine or used by another user account.
+* **Local Only**: All credentials stay on your machine. Nothing is ever sent to any remote server or external service.
+
+## Reverting Changes
+The script includes a built-in restore function. Run the script like described above and choose 9: Reset All
+If you want to revert the patch manually:
+1. Locate the `workbench.html.bak` file in the same directory where `workbench.html` was found.
+2. Delete the patched `workbench.html` and rename `workbench.html.bak` back to `workbench.html`.
+
+## License
+Distributed under the **MIT License**. See `LICENSE` for more information.
